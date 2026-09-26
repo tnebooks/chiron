@@ -27,6 +27,7 @@ from docling.datamodel.pipeline_options import (
     TableFormerMode,
 )
 from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling_core.types.doc import ImageRefMode
 from docling_core.types.io import DocumentStream
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,10 @@ class ConversionOptions:
     num_threads: int = _DEFAULT_NUM_THREADS
     max_num_pages: int = 500
     max_file_size_bytes: int = 100 * 1024 * 1024
+    # Off by default -- the plain Phase 1 app never needs figures extracted.
+    # The publish-to-GitHub wizard turns this on so chapter markdown can
+    # reference real image files instead of placeholders.
+    generate_picture_images: bool = False
 
 
 @dataclass
@@ -68,6 +73,7 @@ def build_pipeline_options(opts: ConversionOptions) -> PdfPipelineOptions:
         do_table_structure=opts.do_table_structure,
     )
     pipeline_options.table_structure_options.mode = opts.table_mode
+    pipeline_options.generate_picture_images = opts.generate_picture_images
     pipeline_options.accelerator_options = AcceleratorOptions(
         num_threads=opts.num_threads,
         device=AcceleratorDevice.AUTO,  # picks CUDA/MPS over CPU when available
@@ -139,10 +145,16 @@ def convert_pdf_to_markdown(
     source: Union[Path, BinaryIO, DocumentStream],
     filename: str,
     opts: ConversionOptions,
+    image_dir: Path | None = None,
 ) -> ConversionOutcome:
     """Convert a single PDF to markdown. Never raises for expected failure
     modes (corrupt/unsupported PDF, oversized file) -- returns a structured
     outcome instead so the UI can render a friendly error per file.
+
+    If `image_dir` is given (requires `opts.generate_picture_images=True`),
+    figures are written into that directory and referenced from the markdown
+    via relative links (`![](filename.png)`) instead of the default
+    `<!-- image -->` placeholder.
     """
     started_at = datetime.now(timezone.utc)
     start = time.perf_counter()
@@ -176,4 +188,12 @@ def convert_pdf_to_markdown(
         error_msg = "; ".join(str(e) for e in result.errors) or f"Conversion status: {result.status}"
         return _finish(ok=False, markdown=None, error=error_msg)
 
-    return _finish(ok=True, markdown=result.document.export_to_markdown(), error=None)
+    if image_dir is not None:
+        image_dir.mkdir(parents=True, exist_ok=True)
+        markdown = result.document.export_to_markdown(
+            image_mode=ImageRefMode.REFERENCED, image_dir=image_dir,
+        )
+    else:
+        markdown = result.document.export_to_markdown()
+
+    return _finish(ok=True, markdown=markdown, error=None)

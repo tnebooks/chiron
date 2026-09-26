@@ -1,0 +1,200 @@
+[
+  {
+    "id": 582958710,
+    "name": "12th-physics",
+    "full_name": "tnebooks/12th-physics",
+    "private": false,
+    "default_branch": "develop",
+    "url": "https://api.github.com/repos/tnebooks/12th-physics",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 588883723,
+    "name": "10th-science",
+    "full_name": "tnebooks/10th-science",
+    "private": false,
+    "default_branch": "develop",
+    "url": "https://api.github.com/repos/tnebooks/10th-science",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1169713556,
+    "name": "tnebooks.github.io",
+    "full_name": "tnebooks/tnebooks.github.io",
+    "private": false,
+    "default_branch": "main",
+    "url": "https://api.github.com/repos/tnebooks/tnebooks.github.io",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1195299053,
+    "name": "11th-physics",
+    "full_name": "tnebooks/11th-physics",
+    "private": false,
+    "default_branch": "develop",
+    "url": "https://api.github.com/repos/tnebooks/11th-physics",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1200461404,
+    "name": "12th-chemistry",
+    "full_name": "tnebooks/12th-chemistry",
+    "private": false,
+    "default_branch": "develop",
+    "url": "https://api.github.com/repos/tnebooks/12th-chemistry",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1200516186,
+    "name": "11th-chemistry",
+    "full_name": "tnebooks/11th-chemistry",
+    "private": false,
+    "default_branch": "develop",
+    "url": "https://api.github.com/repos/tnebooks/11th-chemistry",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1200549489,
+    "name": "11th-botany",
+    "full_name": "tnebooks/11th-botany",
+    "private": false,
+    "default_branch": "develop",
+    "url": "https://api.github.com/repos/tnebooks/11th-botany",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1201711233,
+    "name": "12th-maths",
+    "full_name": "tnebooks/12th-maths",
+    "private": false,
+    "default_branch": "develop",
+    "url": "https://api.github.com/repos/tnebooks/12th-maths",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1202905874,
+    "name": "11th-maths",
+    "full_name": "tnebooks/11th-maths",
+    "private": false,
+    "default_branch": "develop",
+    "url": "https://api.github.com/repos/tnebooks/11th-maths",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1269132191,
+    "name": "ubuntu-blueprint",
+    "full_name": "tnebooks/ubuntu-blueprint",
+    "private": false,
+    "default_branch": "main",
+    "url": "https://api.github.com/repos/tnebooks/ubuntu-blueprint",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1293397549,
+    "name": "11th-english",
+    "full_name": "tnebooks/11th-english",
+    "private": false,
+    "default_branch": "develop",
+    "url": "https://api.github.com/repos/tnebooks/11th-english",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1295099788,
+    "name": "12th-english",
+    "full_name": "tnebooks/12th-english",
+    "private": false,
+    "default_branch": "main",
+    "url": "https://api.github.com/repos/tnebooks/12th-english",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1312534599,
+    "name": "12th-physics_questions",
+    "full_name": "tnebooks/12th-physics_questions",
+    "private": false,
+    "default_branch": "main",
+    "url": "https://api.github.com/repos/tnebooks/12th-physics_questions",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1368292681,
+    "name": "10th-science_questions",
+    "full_name": "tnebooks/10th-science_questions",
+    "private": false,
+    "default_branch": "main",
+    "url": "https://api.github.com/repos/tnebooks/10th-science_questions",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1369329816,
+    "name": "12th-chemistry_questions",
+    "full_name": "tnebooks/12th-chemistry_questions",
+    "private": false,
+    "default_branch": "main",
+    "url": "https://api.github.com/repos/tnebooks/12th-chemistry_questions",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1376584679,
+    "name": "10th-social",
+    "full_name": "tnebooks/10th-social",
+    "private": false,
+    "default_branch": "develop",
+    "url": "https://api.github.com/repos/tnebooks/10th-social",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1376601693,
+    "name": "10th-social_questions",
+    "full_name": "tnebooks/10th-social_questions",
+    "private": false,
+    "default_branch": "main",
+    "url": "https://api.github.com/repos/tnebooks/10th-social_questions",
+    "owner": {
+      "login": "tnebooks"
+    }
+  },
+  {
+    "id": 1377297367,
+    "name": "10th-maths",
+    "full_name": "tnebooks/10th-maths",
+    "private": false,
+    "default_branch": "develop",
+    "url": "https://api.github.com/repos/tnebooks/10th-maths",
+    "owner": {
+      "login": "tnebooks"
+    }
+  }
+]
