@@ -25,6 +25,8 @@ from docling_core.types.io import DocumentStream
 from dotenv import load_dotenv
 from github import Auth, Github
 
+import requests
+
 from pdf2md.chapters import (
     detect_chapters,
     merge_chapters,
@@ -33,8 +35,18 @@ from pdf2md.chapters import (
     split_chapter,
 )
 from pdf2md.converter import ConversionOptions, convert_pdf_to_markdown, get_converter, warm_up
-from pdf2md.github_pr import create_chapter_pr, list_textbook_repos
-from pdf2md.translation import translate_chapter_to_tamil
+from pdf2md.github_pr import (
+    create_chapter_pr,
+    create_questions_pr,
+    discover_questions_path_convention,
+    list_textbook_repos,
+    resolve_mcq_path_prefix,
+    resolve_questions_repo,
+)
+from pdf2md.markdown_editor import markdown_editor
+from pdf2md.mcq import generate_mcqs_for_chapter
+from pdf2md.quality_gate import compute_quality_report
+from pdf2md.translation import translate_chapter_to_tamil, translate_text
 from pdf2md.wizard_state import WizardState, WizardStep, next_step
 
 load_dotenv()
@@ -141,6 +153,8 @@ _STEP_LABELS = {
     WizardStep.PARSE: "Reading book",
     WizardStep.REVIEW_CHAPTERS: "Review chapters",
     WizardStep.TRANSLATE_REVIEW: "Tamil translation",
+    WizardStep.GENERATE_MCQS: "Practice questions",
+    WizardStep.QUALITY_CHECK: "Quality check",
     WizardStep.CREATE_PR: "Send for review",
     WizardStep.DONE: "Done",
 }
@@ -281,6 +295,7 @@ def _run_parse() -> None:
             return
 
         st.session_state["wizard_full_markdown"] = outcome.markdown
+        state.conversion_confidence = outcome.confidence
         # Docling's heading level for a chapter title varies per document
         # (observed both H1 and H2 for a document's biggest heading,
         # depending on font/layout) -- try a few levels rather than assume.
@@ -395,7 +410,7 @@ def _render_translate_review() -> None:
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("English")
-        st.text_area("English text", chapter.en_markdown, height=400, disabled=True, key=f"en-{chapter.id}")
+        chapter.en_markdown = markdown_editor(chapter.en_markdown, key=f"en-{chapter.id}", height=400)
     with col2:
         st.subheader("Tamil (check and fix if needed)")
         if st.button("Auto-translate this chapter", key=f"translate-{chapter.id}"):
@@ -439,6 +454,142 @@ def _render_translate_review() -> None:
             _advance()
 
 
+def _render_generate_mcqs() -> None:
+    st.header("Practice questions")
+    st.caption(
+        "We can draft multiple-choice practice questions for each chapter. "
+        "Review and edit them (or skip a chapter) before continuing."
+    )
+
+    for chapter in state.chapters:
+        with st.container(border=True):
+            st.subheader(chapter.title)
+            count = st.slider(
+                "How many questions?", min_value=3, max_value=10, value=5, key=f"mcq-count-{chapter.id}",
+            )
+            button_label = "Generate questions" if not chapter.mcqs else "Regenerate questions (replaces the ones below)"
+            if st.button(button_label, key=f"mcq-gen-{chapter.id}"):
+                with st.spinner("Writing questions…"):
+                    outcome = generate_mcqs_for_chapter(chapter, count=count)
+                if outcome.ok:
+                    chapter.mcqs = outcome.mcqs
+                    st.rerun()
+                else:
+                    logger.error("mcq generation failed for chapter %s: %s", chapter.title, outcome.error)
+                    st.error("Couldn't write questions this time. Please try again.")
+
+            remove_idx: int | None = None
+            for q_idx, mcq in enumerate(chapter.mcqs):
+                widget_prefix = f"{chapter.id}-{mcq.id}"
+                with st.expander(f"Q{q_idx + 1}: {mcq.question[:70]}", expanded=False):
+                    mcq.question = st.text_area("Question", mcq.question, key=f"mcq-q-{widget_prefix}")
+
+                    all_options = mcq.choices + mcq.answers
+                    edited_options = [
+                        st.text_input(f"Option {i + 1}", opt, key=f"mcq-opt-{widget_prefix}-{i}")
+                        for i, opt in enumerate(all_options)
+                    ]
+                    correct_idx = st.radio(
+                        "Correct answer",
+                        options=list(range(len(edited_options))),
+                        index=len(mcq.choices),
+                        format_func=lambda i: edited_options[i] or f"Option {i + 1}",
+                        key=f"mcq-correct-{widget_prefix}",
+                        horizontal=True,
+                    )
+                    mcq.answers = [edited_options[correct_idx]]
+                    mcq.choices = [opt for i, opt in enumerate(edited_options) if i != correct_idx]
+
+                    mcq.explanation = st.text_area("Explanation", mcq.explanation, key=f"mcq-exp-{widget_prefix}")
+                    mcq.complexity = st.selectbox(
+                        "Difficulty", ["E", "M", "H"],
+                        index=["E", "M", "H"].index(mcq.complexity) if mcq.complexity in ("E", "M", "H") else 1,
+                        key=f"mcq-complexity-{widget_prefix}",
+                    )
+
+                    if mcq.ta_question:
+                        st.caption(f"Tamil: {mcq.ta_question}")
+                    if st.button("Translate to Tamil", key=f"mcq-translate-{widget_prefix}"):
+                        try:
+                            with st.spinner("Translating…"):
+                                mcq.ta_question = translate_text(mcq.question)
+                                mcq.ta_choices = [translate_text(c) for c in mcq.choices]
+                                mcq.ta_answers = [translate_text(a) for a in mcq.answers]
+                                mcq.ta_explanation = translate_text(mcq.explanation)
+                            st.rerun()
+                        except requests.RequestException as exc:
+                            logger.error("mcq translation failed for %s: %s", mcq.id, exc)
+                            st.error("Translation didn't work this time. Please try again.")
+
+                    if st.button("Remove this question", key=f"mcq-remove-{widget_prefix}"):
+                        remove_idx = q_idx
+
+            if remove_idx is not None:
+                chapter.mcqs.pop(remove_idx)
+                st.rerun()
+
+    if st.button("Next", type="primary"):
+        _advance()
+
+
+def _run_quality_check() -> None:
+    with st.spinner("Checking quality…"):
+        state.quality_report = compute_quality_report(state.chapters, state.conversion_confidence)
+
+
+def _render_quality_check() -> None:
+    st.header("Quality check")
+    st.caption(
+        "We check the extracted text and translations before this is sent to your team. "
+        "Problems shown here must be fixed before you can continue."
+    )
+
+    if state.quality_report is None:
+        _run_quality_check()
+    report = state.quality_report
+
+    if report.passed:
+        st.success("Everything looks good.")
+    else:
+        st.error("We found some problems that need fixing before this can be sent.")
+
+    for issue in report.document_issues:
+        (st.error if issue.severity == "critical" else st.warning)(issue.message)
+
+    for chapter_result in report.chapters:
+        with st.container(border=True):
+            status = "✅" if chapter_result.passed else "❌"
+            st.write(f"{status} **{chapter_result.chapter_title}**")
+            if chapter_result.issues:
+                for issue in chapter_result.issues:
+                    (st.error if issue.severity == "critical" else st.warning)(issue.message)
+            else:
+                st.caption("No problems found.")
+
+    if st.button("Re-check"):
+        state.quality_report = None
+        st.rerun()
+
+    if st.button("Next", type="primary", disabled=not report.passed):
+        _advance()
+
+
+def _ensure_questions_repo_resolved(client, repo_ref) -> None:
+    """Looked up once per session (not on every rerun): the sibling
+    `_questions` repo may not exist for every subject, and discovering its
+    existing file-layout convention costs a couple of extra API calls."""
+    if state.questions_repo_checked:
+        return
+    state.questions_repo_checked = True
+    state.questions_repo = resolve_questions_repo(client, repo_ref)
+    if state.questions_repo is not None:
+        questions_repo_obj = client.get_repo(state.questions_repo.full_name)
+        discovered = discover_questions_path_convention(questions_repo_obj)
+        prefix, used_fallback = resolve_mcq_path_prefix(discovered, repo_ref.name)
+        state.questions_path_prefix = prefix
+        state.questions_path_is_fallback = used_fallback
+
+
 def _render_create_pr() -> None:
     st.header("Send to your team")
     repo_ref = state.selected_repo
@@ -449,12 +600,26 @@ def _render_create_pr() -> None:
     if missing_ta:
         st.warning(f"These chapters don't have a Tamil version yet: {', '.join(missing_ta)}")
 
+    has_mcqs = any(chapter.mcqs for chapter in state.chapters)
+    if has_mcqs:
+        client = _github_client(_github_token())
+        _ensure_questions_repo_resolved(client, repo_ref)
+        if state.questions_repo is None:
+            st.info("We couldn't find a practice-questions repo for this subject -- only the book content will be sent.")
+        elif state.questions_path_is_fallback:
+            st.info(
+                "This subject's practice-questions repo doesn't have an established layout yet -- "
+                "we'll use a default one, and flag it for your reviewers to double check."
+            )
+
     submission_title = st.text_input("Title for your submission", value=f"New chapters for {pretty}")
     notes = st.text_area(
         "Notes for your reviewers (optional)",
         value="\n".join(f"- {c.title}" for c in state.chapters),
         height=120,
     )
+
+    quality_gate_passed = state.quality_report is not None and state.quality_report.passed
 
     preview_only = st.checkbox("Just show me a preview (don't send yet)", value=state.pr_dry_run)
     state.pr_dry_run = preview_only
@@ -464,7 +629,7 @@ def _render_create_pr() -> None:
         st.warning("This will really send the book to your team for review.")
         confirm_text = st.text_input('Type "SEND" to confirm', value="")
 
-    can_submit = preview_only or confirm_text.strip().upper() == "SEND"
+    can_submit = quality_gate_passed and (preview_only or confirm_text.strip().upper() == "SEND")
     button_label = "Show me a preview" if preview_only else "Send for review"
     if st.button(button_label, type="primary", disabled=not can_submit):
         client = _github_client(_github_token())
@@ -473,8 +638,20 @@ def _render_create_pr() -> None:
             result = create_chapter_pr(
                 repo, state.chapters, pr_title=submission_title, pr_body=notes, dry_run=preview_only,
             )
+            questions_result = None
+            if has_mcqs and state.questions_repo is not None:
+                questions_repo = client.get_repo(state.questions_repo.full_name)
+                questions_body = notes
+                if state.questions_path_is_fallback:
+                    questions_body += "\n\n(Used a default file layout -- please check placement.)"
+                questions_result = create_questions_pr(
+                    questions_repo, state.chapters, state.questions_path_prefix,
+                    pr_title=f"{submission_title} — practice questions", pr_body=questions_body,
+                    dry_run=preview_only,
+                )
         state.pr_result = result
-        if not preview_only and result.ok:
+        state.questions_pr_result = questions_result
+        if not preview_only and result.ok and (questions_result is None or questions_result.ok):
             _advance()
 
     if state.pr_result and state.pr_result.dry_run:
@@ -489,7 +666,11 @@ def _render_create_pr() -> None:
                 bits = ["English", "Tamil" if chapter.ta_markdown else "Tamil (missing)"]
                 if chapter.images:
                     bits.append(f"{len(chapter.images)} picture(s)")
+                if chapter.mcqs:
+                    bits.append(f"{len(chapter.mcqs)} practice question(s)")
                 st.write(f"- **{chapter.title}** — " + ", ".join(bits))
+            if state.questions_pr_result and state.questions_pr_result.ok:
+                st.caption(f"Practice questions will go to a separate submission ({len(state.questions_pr_result.tree_entries)} file(s)).")
             st.caption('Nothing has been sent yet. Uncheck the preview box above and type "SEND" to actually send it.')
 
 
@@ -504,6 +685,13 @@ def _render_done() -> None:
         st.success("Your book has been sent to the team for review.")
         if result.pr_url:
             st.markdown(f"[Track this submission]({result.pr_url})")
+        questions_result = state.questions_pr_result
+        if questions_result is not None:
+            if questions_result.ok and questions_result.pr_url:
+                st.markdown(f"[Track the practice questions]({questions_result.pr_url})")
+            elif not questions_result.ok:
+                logger.error("questions submission failed: %s", questions_result.error)
+                st.warning("The book was sent, but the practice questions couldn't be sent. Please contact your administrator.")
 
     if st.button("Start over"):
         state.reset()
@@ -516,6 +704,8 @@ _RENDERERS = {
     WizardStep.PARSE: _render_parse,
     WizardStep.REVIEW_CHAPTERS: _render_review_chapters,
     WizardStep.TRANSLATE_REVIEW: _render_translate_review,
+    WizardStep.GENERATE_MCQS: _render_generate_mcqs,
+    WizardStep.QUALITY_CHECK: _render_quality_check,
     WizardStep.CREATE_PR: _render_create_pr,
     WizardStep.DONE: _render_done,
 }

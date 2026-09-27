@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<!-- EasyMDE, CDN-only -- no npm/webpack build step, matches this project's
+     "no JS build tooling" constraint. Pinned version for reproducibility. -->
+<link rel="stylesheet" href="https://unpkg.com/easymde@2.21.0/dist/easymde.min.css">
+<script src="https://unpkg.com/easymde@2.21.0/dist/easymde.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; }
+  .EasyMDEContainer { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+</style>
+</head>
+<body>
+<textarea id="editor"></textarea>
+<script>
+/* Streamlit custom-component protocol, implemented directly against
+   window.postMessage rather than the `streamlit-component-lib` npm/React
+   package -- there's no build step in this project, and the raw protocol
+   is a small, stable, documented handshake:
+     parent -> iframe: {type: "streamlit:render", args: {...}}
+     iframe -> parent: {type: "streamlit:componentReady"}
+     iframe -> parent: {type: "streamlit:setFrameHeight", height}
+     iframe -> parent: {type: "streamlit:setComponentValue", value}
+*/
+function sendToStreamlit(type, data) {
+  window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*");
+}
+
+let easymde = null;
+let lastSentValue = null;
+let debounceTimer = null;
+
+function reportHeight() {
+  const height = document.body.scrollHeight;
+  sendToStreamlit("streamlit:setFrameHeight", {height: height});
+}
+
+function onChange() {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(function () {
+    const value = easymde.value();
+    lastSentValue = value;
+    sendToStreamlit("streamlit:setComponentValue", {value: value, dataType: "json"});
+  }, 400);
+}
+
+function initEditor(initialValue, height) {
+  const textarea = document.getElementById("editor");
+  easymde = new EasyMDE({
+    element: textarea,
+    initialValue: initialValue || "",
+    spellChecker: false,
+    status: false,
+    minHeight: (height || 400) + "px",
+    toolbar: [
+      "bold", "italic", "heading", "|",
+      "unordered-list", "ordered-list", "|",
+      "link", "image", "table", "|",
+      "preview", "side-by-side", "fullscreen",
+    ],
+  });
+  lastSentValue = initialValue || "";
+  easymde.codemirror.on("change", onChange);
+  easymde.codemirror.on("change", reportHeight);
+  reportHeight();
+}
+
+window.addEventListener("message", function (event) {
+  const data = event.data;
+  if (!data || data.type !== "streamlit:render") return;
+  const args = data.args || {};
+
+  if (easymde === null) {
+    initEditor(args.value, args.height);
+  } else if (args.value !== lastSentValue) {
+    // Value changed from outside this component (e.g. the user switched
+    // chapters, or Python set a new value programmatically) -- sync it in.
+    // A plain external edit that matches what we last sent is a no-op, so
+    // typing here never fights with the editor's own cursor position.
+    easymde.value(args.value);
+    lastSentValue = args.value;
+  }
+});
+
+sendToStreamlit("streamlit:componentReady", {apiVersion: 1});
+</script>
+</body>
+</html>

@@ -74,18 +74,29 @@ def _should_translate(block: str) -> bool:
     return True
 
 
-def _translate_block(block: str, model: str, host: str) -> str:
+def translate_text(text: str, model: str = DEFAULT_OLLAMA_MODEL, host: str = OLLAMA_HOST) -> str:
+    """Translate one plain block of English text/Markdown to Tamil via the
+    local Ollama model. Lower-level than `translate_chapter_to_tamil` (no
+    block-splitting, no pass-through rules) -- used directly by callers that
+    already have a single self-contained string to translate, e.g. one MCQ's
+    question/option text. Raises `requests.RequestException` on transport
+    failure; callers that need a non-raising outcome should catch it
+    themselves (see `translate_chapter_to_tamil` below for the pattern)."""
     response = requests.post(
         f"{host}/api/generate",
         json={
             "model": model,
-            "prompt": _TRANSLATE_PROMPT.format(block=block),
+            "prompt": _TRANSLATE_PROMPT.format(block=text),
             "stream": False,
         },
         timeout=_REQUEST_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
     return response.json()["response"].strip()
+
+
+def _translate_block(block: str, model: str, host: str) -> str:
+    return translate_text(block, model=model, host=host)
 
 
 def translate_chapter_to_tamil(

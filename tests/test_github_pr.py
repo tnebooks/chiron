@@ -8,10 +8,17 @@ from pdf2md.chapters import Chapter
 from pdf2md.github_pr import (
     _FALLBACK_REPOS,
     RepoRef,
+    build_mcq_file,
+    build_mcq_files,
     create_chapter_pr,
+    create_questions_pr,
+    discover_questions_path_convention,
     filter_textbook_repos,
     list_textbook_repos,
+    resolve_mcq_path_prefix,
+    resolve_questions_repo,
 )
+from pdf2md.mcq import MCQ
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -153,3 +160,103 @@ def test_create_chapter_pr_error_surfaces_as_clean_result():
     assert result.ok is False
     assert result.error
     assert result.pr_url is None
+
+
+def _make_mcq(question: str = "Q?") -> MCQ:
+    return MCQ(id="q-abc123", question=question, choices=["a", "b"], answers=["c"], explanation="e", complexity="M", tags=["2023"])
+
+
+def test_resolve_questions_repo_found():
+    client = MagicMock()
+    repo = MagicMock(name="12th-physics_questions", full_name="tnebooks/12th-physics_questions", default_branch="main")
+    repo.name = "12th-physics_questions"
+    client.get_repo.return_value = repo
+
+    result = resolve_questions_repo(client, RepoRef("12th-physics", "tnebooks/12th-physics", "develop"))
+
+    client.get_repo.assert_called_once_with("tnebooks/12th-physics_questions")
+    assert result == RepoRef("12th-physics_questions", "tnebooks/12th-physics_questions", "main")
+
+
+def test_resolve_questions_repo_missing_returns_none():
+    client = MagicMock()
+    client.get_repo.side_effect = GithubException(status=404, data={}, message="not found")
+
+    result = resolve_questions_repo(client, RepoRef("10th-social", "tnebooks/10th-social", "develop"))
+
+    assert result is None
+
+
+def test_discover_questions_path_convention_walks_single_dir_chain():
+    repo = MagicMock()
+
+    def _get_contents(path):
+        science = MagicMock(type="dir", path="questions/science")
+        physics = MagicMock(type="dir", path="questions/science/physics")
+        chapter_dir = MagicMock(type="dir", path="questions/science/physics/electrostatics")
+        by_path = {
+            "questions": [science],
+            "questions/science": [physics],
+            "questions/science/physics": [chapter_dir, MagicMock(type="dir", path="other-chapter")],
+        }
+        return by_path[path]
+
+    repo.get_contents.side_effect = _get_contents
+
+    assert discover_questions_path_convention(repo) == "questions/science/physics"
+
+
+def test_discover_questions_path_convention_missing_tree_returns_none():
+    repo = MagicMock()
+    repo.get_contents.side_effect = GithubException(status=404, data={}, message="not found")
+
+    assert discover_questions_path_convention(repo) is None
+
+
+def test_resolve_mcq_path_prefix_prefers_discovered():
+    assert resolve_mcq_path_prefix("questions/science/physics", "12th-physics") == ("questions/science/physics", False)
+
+
+def test_resolve_mcq_path_prefix_falls_back_to_subject_slug():
+    assert resolve_mcq_path_prefix(None, "10th-social") == ("questions/social", True)
+
+
+def test_build_mcq_file_matches_real_repo_schema():
+    content = build_mcq_file(_make_mcq(), "en")
+
+    assert content.startswith("---\n")
+    assert 'complexity: "M"\n' in content
+    assert 'choices:\n  - "a"\n  - "b"\n' in content
+    assert 'answers:\n  - "c"\n' in content
+    assert 'tags:\n  - "2023"\n' in content
+    assert "**Q?**" in content
+    assert "```markdown\ne\n```" in content
+
+
+def test_build_mcq_files_includes_tamil_sibling_only_when_translated():
+    chapter = _make_chapter("Electrostatics", "electrostatics", 1)
+    chapter.mcqs = [_make_mcq()]
+
+    files = build_mcq_files(chapter, "questions/science/physics")
+    assert [path for path, _ in files] == ["questions/science/physics/electrostatics/q-abc123.md"]
+
+    chapter.mcqs[0].ta_question = "கே?"
+    files = build_mcq_files(chapter, "questions/science/physics")
+    assert [path for path, _ in files] == [
+        "questions/science/physics/electrostatics/q-abc123.md",
+        "questions/science/physics/electrostatics/q-abc123_ta.md",
+    ]
+
+
+def test_create_questions_pr_dry_run_makes_zero_write_calls():
+    repo = MagicMock()
+    repo.name = "12th-physics_questions"
+    chapter = _make_chapter("Electrostatics", "electrostatics", 1)
+    chapter.mcqs = [_make_mcq()]
+
+    result = create_questions_pr(repo, [chapter], "questions/science/physics", pr_title="Add MCQs", pr_body="body", dry_run=True)
+
+    assert result.ok is True
+    assert result.branch_name.startswith("add-questions/12th-physics_questions-")
+    assert len(result.tree_entries) == 1
+    repo.create_pull.assert_not_called()

@@ -56,6 +56,22 @@ class ConversionOptions:
     generate_picture_images: bool = False
 
 
+@dataclass(frozen=True)
+class ConfidenceScores:
+    """Docling's own assessment of how well a conversion went, condensed to
+    plain floats/strings so callers (e.g. the quality gate) never need to
+    import Docling's internal `ConfidenceReport`/`QualityGrade` types.
+    `mean_score`/`low_score` are 0..1; `low_score` is the 5th-percentile
+    across pages, so one badly OCR'd page pulls it down even if most pages
+    are fine. Grades: "poor" (<0.5), "fair" (<0.8), "good" (<0.9),
+    "excellent" (>=0.9), or "unspecified" if Docling had no basis to score."""
+
+    mean_score: float
+    low_score: float
+    mean_grade: str
+    low_grade: str
+
+
 @dataclass
 class ConversionOutcome:
     ok: bool
@@ -65,6 +81,7 @@ class ConversionOutcome:
     started_at: str
     ended_at: str
     duration_seconds: float
+    confidence: ConfidenceScores | None = None
 
 
 def build_pipeline_options(opts: ConversionOptions) -> PdfPipelineOptions:
@@ -140,6 +157,24 @@ def _is_success(result: ConversionResult) -> bool:
     return result.status.name in ("SUCCESS", "PARTIAL_SUCCESS")
 
 
+def _extract_confidence(result: ConversionResult) -> ConfidenceScores | None:
+    """Condense Docling's `result.confidence` into plain floats/strings.
+    Never raises: an unexpected Docling internal shape shouldn't fail the
+    whole conversion, it should just leave the quality gate without this
+    signal (structural + LLM checks still run)."""
+    try:
+        report = result.confidence
+        return ConfidenceScores(
+            mean_score=float(report.mean_score),
+            low_score=float(report.low_score),
+            mean_grade=report.mean_grade.value,
+            low_grade=report.low_grade.value,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        logger.info("could not extract Docling confidence report: %s", exc)
+        return None
+
+
 def convert_pdf_to_markdown(
     converter: DocumentConverter,
     source: Union[Path, BinaryIO, DocumentStream],
@@ -196,4 +231,4 @@ def convert_pdf_to_markdown(
     else:
         markdown = result.document.export_to_markdown()
 
-    return _finish(ok=True, markdown=markdown, error=None)
+    return _finish(ok=True, markdown=markdown, error=None, confidence=_extract_confidence(result))

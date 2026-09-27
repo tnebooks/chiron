@@ -9,7 +9,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from pdf2md.chapters import Chapter
+from pdf2md.converter import ConfidenceScores
 from pdf2md.github_pr import PrResult, RepoRef
+from pdf2md.quality_gate import QualityReport
 
 
 class WizardStep(str, Enum):
@@ -18,6 +20,8 @@ class WizardStep(str, Enum):
     PARSE = "parse"
     REVIEW_CHAPTERS = "review_chapters"
     TRANSLATE_REVIEW = "translate_review"
+    GENERATE_MCQS = "generate_mcqs"
+    QUALITY_CHECK = "quality_check"
     CREATE_PR = "create_pr"
     DONE = "done"
 
@@ -41,8 +45,15 @@ class WizardState:
     parse_error: str | None = None
     chapters: list[Chapter] = field(default_factory=list)
     active_chapter_idx: int = 0
+    conversion_confidence: ConfidenceScores | None = None
+    quality_report: QualityReport | None = None
     pr_dry_run: bool = True
     pr_result: PrResult | None = None
+    questions_repo: RepoRef | None = None
+    questions_repo_checked: bool = False
+    questions_path_prefix: str | None = None
+    questions_path_is_fallback: bool = False
+    questions_pr_result: PrResult | None = None
 
     def reset(self) -> None:
         """Start over -- used by the wizard's "Start over" control."""
@@ -53,5 +64,12 @@ class WizardState:
         self.parse_error = None
         self.chapters = []
         self.active_chapter_idx = 0
+        self.conversion_confidence = None
+        self.quality_report = None
         self.pr_dry_run = True
         self.pr_result = None
+        self.questions_repo = None
+        self.questions_repo_checked = False
+        self.questions_path_prefix = None
+        self.questions_path_is_fallback = False
+        self.questions_pr_result = None

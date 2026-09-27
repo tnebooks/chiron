@@ -13,7 +13,12 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from typing import TYPE_CHECKING
+
 from slugify import slugify
+
+if TYPE_CHECKING:
+    from pdf2md.mcq import MCQ
 
 _IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 _CHAPTER_PREFIX_RE = re.compile(r"^chapter\s+\d+\s*[:\-]?\s*", re.IGNORECASE)
@@ -30,6 +35,7 @@ class Chapter:
     en_markdown: str
     ta_markdown: str | None = None
     images: list[tuple[str, bytes]] = field(default_factory=list)
+    mcqs: list["MCQ"] = field(default_factory=list)
 
 
 def slugify_title(title: str) -> str:
@@ -132,6 +138,7 @@ def merge_chapters(chapters: list[Chapter], indices: list[int]) -> list[Chapter]
         if all(ch.ta_markdown for ch in to_merge)
         else None
     )
+    merged.mcqs = []  # stale once the underlying text changes -- regenerate
     seen = {name for name, _ in merged.images}
     for ch in to_merge[1:]:
         for name, data in ch.images:

@@ -29,6 +29,7 @@ from github.Repository import Repository
 
 from pdf2md.chapters import Chapter
 from pdf2md.hugo_frontmatter import build_chapter_file
+from pdf2md.mcq import MCQ
 
 logger = logging.getLogger(__name__)
 
@@ -107,29 +108,19 @@ def _chapter_files(chapter: Chapter) -> list[tuple[str, bytes | str]]:
     return files
 
 
-def create_chapter_pr(
+def _create_pr_from_files(
     repo: Repository,
-    chapters: list[Chapter],
+    files: list[tuple[str, bytes | str]],
+    branch_prefix: str,
+    commit_message: str,
     pr_title: str,
     pr_body: str,
-    dry_run: bool = True,
+    dry_run: bool,
 ) -> PrResult:
-    """Create one atomic multi-file commit (every chapter's English + Tamil
-    `_index.md` + images) on a new branch off `repo`'s live default branch,
-    then open a PR into that same branch.
-
-    `dry_run=True` (default) computes the branch name, commit message, and
-    full tree-entry list and returns *before* making any write call --
-    same code path used by tests and the wizard's "Dry run" checkbox, so a
-    real click-through never touches the live write path unless explicitly
-    un-gated.
-    """
-    branch_name = f"add-content/{repo.name}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
-    commit_message = f"Add {len(chapters)} chapter(s): " + ", ".join(c.title for c in chapters)
-
-    files: list[tuple[str, bytes | str]] = []
-    for chapter in chapters:
-        files.extend(_chapter_files(chapter))
+    """Shared Git Data API dance (blobs -> tree -> commit -> ref -> PR) used
+    by both `create_chapter_pr` and `create_questions_pr` -- the only
+    difference between the two is which files go into the commit."""
+    branch_name = f"{branch_prefix}/{repo.name}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
 
     tree_entries = [
         {"path": path, "mode": "100644", "type": "blob", "is_binary": isinstance(content, bytes)}
@@ -161,14 +152,162 @@ def create_chapter_pr(
             base=repo.default_branch, head=branch_name, title=pr_title, body=pr_body,
         )
     except GithubException as exc:
-        logger.error("create_chapter_pr failed repo=%s branch=%s: %s", repo.full_name, branch_name, exc)
+        logger.error("_create_pr_from_files failed repo=%s branch=%s: %s", repo.full_name, branch_name, exc)
         return PrResult(
             ok=False, dry_run=False, branch_name=branch_name,
             commit_message=commit_message, tree_entries=tree_entries, error=str(exc),
         )
 
-    logger.info("create_chapter_pr ok repo=%s branch=%s pr_url=%s", repo.full_name, branch_name, pull_request.html_url)
+    logger.info("_create_pr_from_files ok repo=%s branch=%s pr_url=%s", repo.full_name, branch_name, pull_request.html_url)
     return PrResult(
         ok=True, dry_run=False, branch_name=branch_name, commit_message=commit_message,
         tree_entries=tree_entries, pr_url=pull_request.html_url,
     )
+
+
+def create_chapter_pr(
+    repo: Repository,
+    chapters: list[Chapter],
+    pr_title: str,
+    pr_body: str,
+    dry_run: bool = True,
+) -> PrResult:
+    """Create one atomic multi-file commit (every chapter's English + Tamil
+    `_index.md` + images) on a new branch off `repo`'s live default branch,
+    then open a PR into that same branch.
+
+    `dry_run=True` (default) computes the branch name, commit message, and
+    full tree-entry list and returns *before* making any write call --
+    same code path used by tests and the wizard's "Dry run" checkbox, so a
+    real click-through never touches the live write path unless explicitly
+    un-gated.
+    """
+    commit_message = f"Add {len(chapters)} chapter(s): " + ", ".join(c.title for c in chapters)
+    files: list[tuple[str, bytes | str]] = []
+    for chapter in chapters:
+        files.extend(_chapter_files(chapter))
+    return _create_pr_from_files(repo, files, "add-content", commit_message, pr_title, pr_body, dry_run)
+
+
+def resolve_questions_repo(client: Github, textbook_repo: RepoRef) -> RepoRef | None:
+    """Look up the sibling `<repo>_questions` repo in the same org as
+    `textbook_repo` (e.g. `tnebooks/12th-physics` -> `tnebooks/12th-physics_questions`).
+    Returns `None` -- not an exception -- if it doesn't exist; the caller
+    should treat that as "no MCQ repo to publish to" rather than an error,
+    since not every subject has one set up yet."""
+    questions_full_name = f"{textbook_repo.full_name}_questions"
+    try:
+        repo = client.get_repo(questions_full_name)
+    except GithubException as exc:
+        logger.info("resolve_questions_repo: no sibling repo %s (%s)", questions_full_name, exc)
+        return None
+    return RepoRef(name=repo.name, full_name=repo.full_name, default_branch=repo.default_branch)
+
+
+def discover_questions_path_convention(repo: Repository) -> str | None:
+    """Find the existing `questions/<category>/<subject>/` path prefix a
+    `_questions` repo already uses, by walking down from `questions/` while
+    each level has exactly one subdirectory and no files -- matches the
+    real layout observed in `tnebooks/12th-physics_questions`
+    (`questions/science/physics/<chapter-slug>/*.md`). Returns `None` if the
+    repo has no `questions/` tree yet (e.g. a newly created, still-empty
+    `_questions` repo) or the tree doesn't follow this single-chain shape,
+    so the caller can fall back to a default convention instead."""
+    try:
+        contents = repo.get_contents("questions")
+    except GithubException:
+        return None
+
+    path = "questions"
+    while True:
+        if not isinstance(contents, list):
+            break
+        dirs = [c for c in contents if c.type == "dir"]
+        files = [c for c in contents if c.type == "file"]
+        if files or len(dirs) != 1:
+            break
+        path = dirs[0].path
+        try:
+            contents = repo.get_contents(path)
+        except GithubException:
+            break
+    return path if path != "questions" else None
+
+
+def resolve_mcq_path_prefix(discovered_prefix: str | None, textbook_repo_name: str) -> tuple[str, bool]:
+    """Returns `(path_prefix, used_fallback)`. Prefers the sibling repo's
+    own discovered convention; falls back to `questions/<subject-slug>`
+    (derived from the textbook repo's `<grade>-<subject>` name) when the
+    sibling repo has no established convention to match."""
+    if discovered_prefix:
+        return discovered_prefix, False
+    _, _, subject = textbook_repo_name.partition("-")
+    return f"questions/{subject or textbook_repo_name}", True
+
+
+def _quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def build_mcq_file(mcq: MCQ, language: str) -> str:
+    """language in {"en", "ta"}. Front matter/body format verified against
+    a real file in `tnebooks/12th-physics_questions`
+    (`questions/science/physics/electrostatics/electric-dipole.md`): YAML
+    front matter with `choices` (incorrect options), `answers` (correct
+    option(s)), optional `complexity`/`tags`, then a bold question line and
+    a fenced ```markdown block with the explanation."""
+    if language == "en":
+        question, choices, answers, explanation = mcq.question, mcq.choices, mcq.answers, mcq.explanation
+    elif language == "ta":
+        question = mcq.ta_question or mcq.question
+        choices = mcq.ta_choices or mcq.choices
+        answers = mcq.ta_answers or mcq.answers
+        explanation = mcq.ta_explanation or mcq.explanation
+    else:
+        raise ValueError(f"language must be 'en' or 'ta', got {language!r}")
+
+    lines = ["---"]
+    if mcq.complexity:
+        lines.append(f"complexity: {_quote(mcq.complexity)}")
+    lines.append("choices:")
+    lines += [f"  - {_quote(choice)}" for choice in choices]
+    lines.append("answers:")
+    lines += [f"  - {_quote(answer)}" for answer in answers]
+    if mcq.tags:
+        lines.append("tags:")
+        lines += [f"  - {_quote(tag)}" for tag in mcq.tags]
+    lines.append("---")
+
+    front_matter = "\n".join(lines) + "\n"
+    body = f"\n**{question}**\n\n```markdown\n{explanation}\n```\n"
+    return front_matter + body
+
+
+def build_mcq_files(chapter: Chapter, path_prefix: str) -> list[tuple[str, bytes | str]]:
+    """(path, content) pairs for every MCQ on `chapter`, one file per
+    question (+ a `_ta.md` sibling when it has a Tamil translation, matching
+    the existing repo's convention)."""
+    files: list[tuple[str, bytes | str]] = []
+    for mcq in chapter.mcqs:
+        base = f"{path_prefix}/{chapter.slug}/{mcq.id}"
+        files.append((f"{base}.md", build_mcq_file(mcq, "en")))
+        if mcq.ta_question:
+            files.append((f"{base}_ta.md", build_mcq_file(mcq, "ta")))
+    return files
+
+
+def create_questions_pr(
+    repo: Repository,
+    chapters: list[Chapter],
+    path_prefix: str,
+    pr_title: str,
+    pr_body: str,
+    dry_run: bool = True,
+) -> PrResult:
+    """Same atomic-commit pattern as `create_chapter_pr`, for MCQ files
+    against a sibling `_questions` repo instead of the textbook repo."""
+    commit_message = f"Add questions for {len(chapters)} chapter(s): " + ", ".join(c.title for c in chapters)
+    files: list[tuple[str, bytes | str]] = []
+    for chapter in chapters:
+        files.extend(build_mcq_files(chapter, path_prefix))
+    return _create_pr_from_files(repo, files, "add-questions", commit_message, pr_title, pr_body, dry_run)

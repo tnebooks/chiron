@@ -114,6 +114,26 @@ def test_merge_chapters_keeps_tamil_if_all_present():
     assert result[0].ta_markdown == "தமிழ் A\n\nதமிழ் B"
 
 
+def test_merge_chapters_drops_mcqs_since_underlying_text_changed():
+    from pdf2md.mcq import MCQ
+
+    chapters = [_make_chapter("A", 1), _make_chapter("B", 2)]
+    chapters[0].mcqs = [MCQ(id="q-1", question="Q?", choices=["a"], answers=["b"], explanation="e")]
+    result = merge_chapters(chapters, [0, 1])
+    assert result[0].mcqs == []
+
+
+def test_split_chapter_starts_with_no_mcqs():
+    chapter = _make_chapter("Combined", 1)
+    chapter.en_markdown = (
+        "# Chapter 1: Combined\n\nFirst part text.\n\n"
+        "# Chapter 2: Second Part\n\nSecond part text.\n"
+    )
+    first, second = split_chapter(chapter, 3)
+    assert first.mcqs == []
+    assert second.mcqs == []
+
+
 def test_split_chapter_finds_next_heading_for_second_title():
     chapter = _make_chapter("Combined", 1)
     chapter.en_markdown = (
